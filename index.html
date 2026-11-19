@@ -100,10 +100,15 @@ li:first-child > .cat { border-top: 0; }
 .chart .axis { stroke: var(--line); }
 
 /* Даты выплат */
-dl.dates { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; }
-dl.dates dt { color: var(--muted); }
-dl.dates dd { margin: 0; font-weight: 600; }
-dl.dates dd.unset { color: var(--muted); font-weight: 400; }
+.daterow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 12px 0; border-top: 1px solid var(--line); }
+.daterow:first-child { border-top: 0; padding-top: 0; }
+.daterow .label { flex: 1 1 230px; color: var(--muted); }
+.daterow .current { flex: 0 0 150px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.daterow .current.unset { color: var(--muted); font-weight: 400; }
+.daterow input[type="date"] { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.daterow .actions { margin: 0; }
+.daterow .rownote { flex: 1 1 100%; font-size: 13px; color: var(--muted); min-height: 0; }
+.daterow .rownote.bad { color: var(--over); }
 .note { color: var(--muted); font-size: 13px; margin: 12px 0 0; max-width: 78ch; }
 
 /* Заявки */
@@ -190,6 +195,12 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
   <p class="facts" id="facts"></p>
 
   <section>
+    <h2>Даты выплат, которые видят работники</h2>
+    <div class="dates" id="dates"></div>
+    <p class="note">Работники видят новую дату в боте сразу после сохранения. Сбросить дату можно кнопкой «Сбросить»: тогда бот ответит «пока не назначена». Менять даты можно и в самом боте: «Панель сотрудника» → «Даты выплат».</p>
+  </section>
+
+  <section>
     <h2>Разделы бота</h2>
     <ul class="cats" id="cats"></ul>
     <div class="legend" id="legend"></div>
@@ -198,12 +209,6 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
   <section>
     <h2>Новые заявки за 14 дней</h2>
     <div id="chart"></div>
-  </section>
-
-  <section>
-    <h2>Даты выплат, которые видят работники</h2>
-    <dl class="dates" id="dates"></dl>
-    <p class="note">Даты меняет администратор в самом боте: «Панель сотрудника» → «Даты выплат». Здесь они показаны только для проверки.</p>
   </section>
 
   <section>
@@ -366,11 +371,52 @@ function renderChart(daily) {
   $("#chart").replaceChildren(svg);
 }
 
+const toIso = (v) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(v || ""); return m ? `${m[3]}-${m[2]}-${m[1]}` : ""; };
+const fromIso = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || ""); return m ? `${m[3]}.${m[2]}.${m[1]}` : ""; };
+const dateRows = {};
+
+function showDate(key, value) {
+  const r = dateRows[key];
+  r.current.textContent = value || "не задана";
+  r.current.className = "current" + (value ? "" : " unset");
+}
+
+// Строки создаются один раз, чтобы автообновление не стирало дату, которую человек сейчас выбирает.
 function renderDates(settings) {
-  $("#dates").replaceChildren(...settings.flatMap((s) => [
-    el("dt", { text: s.title }),
-    el("dd", { class: s.value ? "" : "unset", text: s.value || "не задана, работники видят «пока не назначена»" }),
-  ]));
+  const box = $("#dates");
+  if (!box.children.length) {
+    box.replaceChildren(...settings.map((s) => {
+      const current = el("span", { class: "current" });
+      const input = el("input", { type: "date", "aria-label": s.title });
+      input.value = toIso(s.value);
+      const note = el("span", { class: "rownote", role: "status" });
+      const save = el("button", { type: "button", class: "primary", text: "Сохранить" });
+      const reset = el("button", { type: "button", text: "Сбросить" });
+      const say = (text, bad) => { note.textContent = text; note.className = "rownote" + (bad ? " bad" : ""); };
+      const send = async (value, okText) => {
+        save.disabled = reset.disabled = true; say("Сохраняю…");
+        try {
+          const res = await post("/api/settings/" + s.key, { value });
+          showDate(s.key, res.value); input.value = toIso(res.value); say(okText);
+        } catch (e) {
+          say(e.detail || "Не удалось сохранить. Попробуйте ещё раз.", true);
+        }
+        save.disabled = reset.disabled = false;
+      };
+      save.addEventListener("click", () => {
+        if (!input.value) { say("Выберите дату в календаре.", true); return; }
+        send(fromIso(input.value), "Сохранено. Работники уже видят новую дату.");
+      });
+      reset.addEventListener("click", () => {
+        if (confirm(`Сбросить дату? Работники увидят «пока не назначена».`)) send("", "Дата сброшена.");
+      });
+      dateRows[s.key] = { current };
+      return el("div", { class: "daterow" },
+        el("span", { class: "label", text: s.title }), current, input,
+        el("div", { class: "actions" }, save, reset), note);
+    }));
+  }
+  for (const s of settings) showDate(s.key, s.value);
 }
 
 function renderTable() {
@@ -408,7 +454,11 @@ async function post(path, body) {
     headers: { "Content-Type": "application/json", "X-Dashboard": "1" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(String(r.status));
+  if (!r.ok) {
+    const err = new Error(String(r.status));
+    try { err.detail = (await r.json()).error; } catch (_) { /* тело не JSON */ }
+    throw err;
+  }
   return r.json();
 }
 

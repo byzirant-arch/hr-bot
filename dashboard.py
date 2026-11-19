@@ -12,6 +12,7 @@ from aiohttp import web
 
 import config
 import db
+import validators
 from menu_config import CATEGORIES, SETTINGS, STATUS_TITLES
 
 log = logging.getLogger("dashboard")
@@ -232,6 +233,24 @@ async def api_status(request: web.Request):
     return web.json_response({"ok": True})
 
 
+async def api_setting(request: web.Request):
+    """Изменить дату выплаты, которую видят работники. Пустое значение сбрасывает дату."""
+    key = request.match_info["key"]
+    if key not in SETTINGS:
+        raise web.HTTPNotFound(text="not found")
+    value = str((await _json_body(request)).get("value", "")).strip()
+    if not value:
+        db.clear_setting(key)
+        log.info("Дашборд: дата «%s» сброшена", key)
+        return web.json_response({"ok": True, "value": ""})
+    ok, result = validators.check("pay_date", value)
+    if not ok:
+        return web.json_response({"ok": False, "error": result}, status=400)
+    db.set_setting(key, result)
+    log.info("Дашборд: дата «%s» = %s", key, result)
+    return web.json_response({"ok": True, "value": result})
+
+
 def make_app() -> web.Application:
     app = web.Application(middlewares=[guard])
     app.router.add_get("/", index)
@@ -241,6 +260,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/request/{id}", api_request)
     app.router.add_post("/api/request/{id}/reply", api_reply)
     app.router.add_post("/api/request/{id}/status", api_status)
+    app.router.add_post("/api/settings/{key}", api_setting)
     return app
 
 

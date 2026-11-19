@@ -118,6 +118,10 @@ def set_setting(key: str, value: str) -> None:
     )
 
 
+def clear_setting(key: str) -> None:
+    _run("DELETE FROM settings WHERE key=?", (key,))
+
+
 # ---------- состояние диалога ----------
 def get_session(user_id: int) -> dict | None:
     row = _run("SELECT state, data FROM sessions WHERE user_id=?", (user_id,), "one")
