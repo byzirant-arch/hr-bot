@@ -83,16 +83,90 @@ def init() -> None:
             );
             """
         )
+        _migrate()
         _db().commit()
+
+
+def _columns(table: str) -> set[str]:
+    return {r[1] for r in _db().execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate() -> None:
+    """Добавляет новые поля и таблицы в уже существующую базу (данные сохраняются)."""
+    for table, col, decl in [("users", "full_name", "TEXT"), ("users", "position", "TEXT"),
+                             ("users", "note", "TEXT"), ("users", "last_seen", "TEXT"),
+                             ("replies", "files", "TEXT")]:
+        if col not in _columns(table):
+            _db().execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    _db().execute(
+        """CREATE TABLE IF NOT EXISTS broadcasts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            author_id INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            files TEXT NOT NULL DEFAULT '[]',
+            total INTEGER NOT NULL DEFAULT 0,
+            ok INTEGER NOT NULL DEFAULT 0,
+            failed INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'sending'
+        )"""
+    )
 
 
 # ---------- пользователи ----------
 def upsert_user(user_id: int, name: str) -> None:
+    now = now_iso()
     _run(
-        "INSERT INTO users(user_id, name, created_at) VALUES(?,?,?) "
-        "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name",
-        (user_id, name, now_iso()),
+        "INSERT INTO users(user_id, name, created_at, last_seen) VALUES(?,?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name, last_seen=excluded.last_seen",
+        (user_id, name, now, now),
     )
+
+
+CONTACT_FIELDS = {"full_name": 120, "position": 120, "note": 500}
+
+
+def get_user(user_id: int) -> dict | None:
+    return _run("SELECT * FROM users WHERE user_id=?", (user_id,), "one")
+
+
+def users_by_ids(ids: list[int]) -> dict[int, dict]:
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = _run(f"SELECT * FROM users WHERE user_id IN ({marks})", tuple(ids), "all")
+    return {r["user_id"]: r for r in rows}
+
+
+def all_user_ids() -> list[int]:
+    return [r["user_id"] for r in _run("SELECT user_id FROM users ORDER BY user_id", (), "all")]
+
+
+def count_users() -> int:
+    return _run("SELECT COUNT(*) AS n FROM users", (), "one")["n"]
+
+
+def list_users(q: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    rows = _run(
+        "SELECT u.*, (SELECT COUNT(*) FROM requests r WHERE r.user_id = u.user_id) AS requests "
+        "FROM users u ORDER BY COALESCE(u.last_seen, u.created_at) DESC",
+        (), "all",
+    )
+    q = (q or "").strip().casefold()
+    if q:
+        rows = [r for r in rows if q in " ".join(
+            str(r.get(k) or "") for k in ("user_id", "name", "full_name", "position", "note")).casefold()]
+    return rows[offset: offset + limit], len(rows)
+
+
+def update_contact(user_id: int, field: str, value: str) -> bool:
+    """Меняет ФИО, должность или пометку контакта. Пустое значение очищает поле."""
+    if field not in CONTACT_FIELDS or not get_user(user_id):
+        return False
+    value = (value or "").strip()[: CONTACT_FIELDS[field]]
+    _run(f"UPDATE users SET {field}=? WHERE user_id=?", (value or None, user_id))
+    return True
 
 
 def has_consent(user_id: int) -> bool:
@@ -193,17 +267,18 @@ def set_status(request_id: int, status: str) -> None:
     _run("UPDATE requests SET status=?, closed_at=? WHERE id=?", (status, closed_at, request_id))
 
 
-def add_reply(request_id: int, from_id: int, text: str) -> None:
+def add_reply(request_id: int, from_id: int, text: str, files: list[str] | None = None) -> None:
     _run(
-        "INSERT INTO replies(request_id, from_id, text, created_at) VALUES(?,?,?,?)",
-        (request_id, from_id, text, now_iso()),
+        "INSERT INTO replies(request_id, from_id, text, created_at, files) VALUES(?,?,?,?,?)",
+        (request_id, from_id, text, now_iso(), json.dumps(files or [], ensure_ascii=False)),
     )
 
 
 def get_replies(request_id: int) -> list[dict]:
-    return _run(
-        "SELECT * FROM replies WHERE request_id=? ORDER BY id", (request_id,), "all"
-    )
+    rows = _run("SELECT * FROM replies WHERE request_id=? ORDER BY id", (request_id,), "all")
+    for r in rows:
+        r["files"] = json.loads(r["files"]) if r.get("files") else []
+    return rows
 
 
 def due_for_reminder(before_hours: float) -> list[dict]:
@@ -273,9 +348,10 @@ def stats(tz_name: str, days: int = 14) -> dict:
 def search_requests(category: str = "", status: str = "", q: str = "",
                     limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
     where, params = [], []
-    if category:
-        where.append("category=?")
-        params.append(category)
+    cats = [c for c in (category or "").split(",") if c]
+    if cats:
+        where.append(f"category IN ({','.join('?' * len(cats))})")
+        params.extend(cats)
     if status == "active":
         where.append("status IN ('new','in_work')")
     elif status == "overdue":
@@ -294,3 +370,30 @@ def search_requests(category: str = "", status: str = "", q: str = "",
             return q.lstrip("№#") in blob
         rows = [r for r in rows if hit(r)]
     return rows[offset: offset + limit], len(rows)
+
+
+# ---------- рассылки ----------
+def create_broadcast(author_id: int, text: str, files: list[str], total: int) -> int:
+    return _run(
+        "INSERT INTO broadcasts(created_at, author_id, text, files, total) VALUES(?,?,?,?,?)",
+        (now_iso(), author_id, text, json.dumps(files, ensure_ascii=False), total),
+        "id",
+    )
+
+
+def update_broadcast(bc_id: int, ok: int, failed: int, status: str) -> None:
+    finished = now_iso() if status != "sending" else None
+    _run("UPDATE broadcasts SET ok=?, failed=?, status=?, finished_at=? WHERE id=?",
+         (ok, failed, status, finished, bc_id))
+
+
+def list_broadcasts(limit: int = 20) -> list[dict]:
+    rows = _run("SELECT * FROM broadcasts ORDER BY id DESC LIMIT ?", (limit,), "all")
+    for r in rows:
+        r["files"] = json.loads(r["files"]) if r.get("files") else []
+    return rows
+
+
+def interrupt_broadcasts() -> None:
+    """При запуске бота: рассылки, прерванные перезапуском, помечаются как прерванные."""
+    _run("UPDATE broadcasts SET status='interrupted', finished_at=? WHERE status='sending'", (now_iso(),))

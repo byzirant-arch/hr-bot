@@ -23,7 +23,12 @@ CATEGORIES = {
     "ticket_when":    {"title": "Запрос о сроках приобретения билета", "sla_hours": 24},
     "certificate":    {"title": "Запрос справки",                  "sla_hours": 72},
     "documents":      {"title": "Запрос документов",               "sla_hours": 24},
+    "payslip_order":    {"title": "Заказ расчётного листа",     "sla_hours": 24},
+    "payslip_question": {"title": "Вопрос по расчётному листу", "sla_hours": 24},
 }
+
+# Заявки этих категорий получает бухгалтер (а не отдел кадров)
+ACCOUNTANT_CATEGORIES = ("payslip_order", "payslip_question")
 
 # Настройки, которые администратор меняет в панели (ключ → название)
 SETTINGS = {
@@ -49,6 +54,7 @@ SCREENS = {
             ("Суточные", "go:per_diem"),
             ("Билеты", "go:tickets"),
             ("Справки и запрос документов", "go:docs"),
+            ("Расчётный лист", "go:payslip"),
         ],
     },
     "salary": {
@@ -83,6 +89,15 @@ SCREENS = {
             ("Мне нужны документы", "flow:documents"),
         ],
     },
+}
+
+SCREENS["payslip"] = {
+    "text": "Раздел «Расчётный лист». Выберите действие:",
+    "parent": "main",
+    "buttons": [
+        ("Заказать расчётный лист", "flow:payslip_order"),
+        ("Задать вопрос по расчётному листу", "flow:payslip_question"),
+    ],
 }
 
 # Информационные ответы: подставляют значение, заданное администратором
@@ -171,4 +186,33 @@ FLOWS = {
         ],
         "done_text": "Ваш запрос принят. Документы будут направлены в течение 1 дня.",
     },
+}
+
+
+# Раздел «Расчётный лист» (заявки получает бухгалтер)
+FLOWS["payslip_order"] = {
+    "category": "payslip_order",
+    "screen": "payslip",
+    "steps": [
+        {"key": "fio", "label": "ФИО", "validator": "fio",
+         "prompt": "Укажите ваши фамилию, имя и отчество"},
+        {"key": "period", "label": "Период", "validator": "period",
+         "prompt": "За какой период нужен расчётный лист? (например: октябрь 2026)"},
+        {"key": "send_to", "label": "Куда направить", "validator": "contact",
+         "prompt": "Куда направить расчётный лист? " + CONTACT_HINT},
+    ],
+    "done_text": "Ваш запрос на расчётный лист принят и передан бухгалтеру. "
+                 "Расчётный лист будет направлен по указанным реквизитам.",
+}
+FLOWS["payslip_question"] = {
+    "category": "payslip_question",
+    "screen": "payslip",
+    "steps": [
+        {"key": "fio", "label": "ФИО", "validator": "fio",
+         "prompt": "Укажите ваши фамилию, имя и отчество"},
+        {"key": "question", "label": "Вопрос", "validator": "text",
+         "prompt": "Опишите ваш вопрос по расчётному листу"},
+    ],
+    "done_text": "Ваш вопрос по расчётному листу принят и передан бухгалтеру. "
+                 "Мы ответим вам в течение дня.",
 }

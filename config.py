@@ -14,7 +14,9 @@ BOT_TOKEN = os.getenv("MAX_BOT_TOKEN") or os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = _ids("ADMIN_IDS", "329632295")
 # Ответственные: получают уведомления о заявках, видят и обрабатывают их, отвечают работникам.
 RESPONSIBLE_IDS = _ids("RESPONSIBLE_IDS", "245949538")
-STAFF_IDS = ADMIN_IDS | RESPONSIBLE_IDS
+# Бухгалтеры: получают заявки раздела «Расчётный лист». Если не задано, заявки уходят администраторам.
+ACCOUNTANT_IDS = _ids("ACCOUNTANT_IDS", "")
+STAFF_IDS = ADMIN_IDS | RESPONSIBLE_IDS | ACCOUNTANT_IDS
 
 BOT_TZ = os.getenv("BOT_TZ", "Europe/Moscow")
 REMIND_BEFORE_HOURS = float(os.getenv("REMIND_BEFORE_HOURS", "4"))
@@ -41,3 +43,11 @@ CONSENT_TEXT = os.getenv(
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT") or os.getenv("PORT") or 8080)
+
+# ---------- сессия сайта, файлы, рассылка ----------
+SESSION_HOURS = float(os.getenv("SESSION_HOURS", "8"))   # через столько часов сайт снова просит войти
+MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "15"))        # максимальный размер одного файла
+MAX_FILES = 5                                            # файлов в одном ответе или рассылке
+ALLOWED_EXT = {"pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "rtf", "odt", "ods",
+               "jpg", "jpeg", "png", "zip"}
+BROADCAST_DELAY = float(os.getenv("BROADCAST_DELAY", "0.1"))  # пауза между сообщениями рассылки, сек

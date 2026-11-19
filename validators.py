@@ -1,4 +1,5 @@
 """Проверка данных, которые вводит работник. Каждая функция возвращает (успех, значение_или_текст_ошибки)."""
+import os
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -115,7 +116,41 @@ def v_contact(text):
     return True, s
 
 
+def v_period(text):
+    s = _clean(text)
+    if len(s) < 3 or len(s) > 40 or not re.search(r"\w", s):
+        return False, "Укажите период, например: октябрь 2026"
+    return True, s
+
+
+def safe_filename(name: str) -> str:
+    """Имя файла без путей и опасных символов."""
+    name = os.path.basename((name or "file").replace("\\", "/"))
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name).strip(" .") or "file"
+    return name[-100:]
+
+
+def clean_files(files):
+    """Проверка вложений: количество, тип, размер. files = [(имя, байты)]. Возвращает (ok, файлы_или_ошибка)."""
+    if len(files) > config.MAX_FILES:
+        return False, f"Можно приложить не больше {config.MAX_FILES} файлов за раз."
+    out = []
+    for name, data in files:
+        sname = safe_filename(name)
+        ext = sname.rsplit(".", 1)[-1].lower() if "." in sname else ""
+        if ext not in config.ALLOWED_EXT:
+            return False, (f"Файл «{sname}»: такой тип не разрешён. Допустимы: "
+                           + ", ".join(sorted(config.ALLOWED_EXT)) + ".")
+        if not data:
+            return False, f"Файл «{sname}» пустой."
+        if len(data) > config.MAX_FILE_MB * 1024 * 1024:
+            return False, f"Файл «{sname}» больше {config.MAX_FILE_MB} МБ."
+        out.append((sname, data))
+    return True, out
+
+
 VALIDATORS = {
+    "period": v_period,
     "amount": v_amount,
     "future_date": v_future_date,
     "pay_date": v_pay_date,
