@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from aiohttp import web
@@ -20,6 +21,11 @@ TZ = ZoneInfo(config.BOT_TZ)
 MAX_FAILS = 5
 LOCK_SECONDS = 15 * 60
 _fails: dict[str, dict] = {}
+
+# Функции отправки ответа и смены статуса передаёт main.py (чтобы дашборд мог писать работнику через бота)
+_reply_cb = None
+_status_cb = None
+MAX_REPLY = 1500
 
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -57,6 +63,17 @@ def credentials_ok(header: str) -> bool:
     return ok_user and ok_pwd
 
 
+def origin_ok(request: web.Request) -> bool:
+    """Защита от подделки запросов с чужих сайтов: нужен свой заголовок и совпадающий адрес."""
+    if request.headers.get("X-Dashboard") != "1":
+        return False
+    origin = request.headers.get("Origin")
+    if not origin:
+        return True
+    allowed = {request.host, request.headers.get("X-Forwarded-Host", "").split(",")[0].strip()}
+    return urlparse(origin).netloc in allowed
+
+
 @web.middleware
 async def guard(request: web.Request, handler):
     if request.path == "/health":
@@ -78,6 +95,8 @@ async def guard(request: web.Request, handler):
                             headers={**SECURITY_HEADERS,
                                      "WWW-Authenticate": 'Basic realm="Панель бота", charset="UTF-8"'})
     _fails.pop(ip, None)
+    if request.method == "POST" and not origin_ok(request):
+        return web.Response(status=403, text="Запрос отклонён", headers=SECURITY_HEADERS)
     response = await handler(request)
     for k, v in SECURITY_HEADERS.items():
         response.headers[k] = v
@@ -169,6 +188,50 @@ async def api_request(request: web.Request):
     return web.json_response(data)
 
 
+async def _json_body(request: web.Request) -> dict:
+    try:
+        data = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="bad json")
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="bad json")
+    return data
+
+
+def _id(request: web.Request) -> int:
+    try:
+        return int(request.match_info["id"])
+    except ValueError:
+        raise web.HTTPBadRequest(text="bad id")
+
+
+async def api_reply(request: web.Request):
+    if _reply_cb is None:
+        raise web.HTTPServiceUnavailable(text="Отправка недоступна")
+    req_id = _id(request)
+    text = str((await _json_body(request)).get("text", "")).strip()
+    if not text or len(text) > MAX_REPLY:
+        raise web.HTTPBadRequest(text="bad text")
+    delivered = await _reply_cb(req_id, text)
+    if delivered is None:
+        raise web.HTTPNotFound(text="not found")
+    log.info("Дашборд: ответ по заявке №%s (доставлен: %s)", req_id, delivered)
+    return web.json_response({"ok": True, "delivered": bool(delivered)})
+
+
+async def api_status(request: web.Request):
+    if _status_cb is None:
+        raise web.HTTPServiceUnavailable(text="Смена статуса недоступна")
+    req_id = _id(request)
+    status = (await _json_body(request)).get("status")
+    if status not in STATUS_TITLES:
+        raise web.HTTPBadRequest(text="bad status")
+    if not await _status_cb(req_id, status):
+        raise web.HTTPNotFound(text="not found")
+    log.info("Дашборд: заявка №%s → %s", req_id, status)
+    return web.json_response({"ok": True})
+
+
 def make_app() -> web.Application:
     app = web.Application(middlewares=[guard])
     app.router.add_get("/", index)
@@ -176,11 +239,15 @@ def make_app() -> web.Application:
     app.router.add_get("/api/stats", api_stats)
     app.router.add_get("/api/requests", api_requests)
     app.router.add_get("/api/request/{id}", api_request)
+    app.router.add_post("/api/request/{id}/reply", api_reply)
+    app.router.add_post("/api/request/{id}/status", api_status)
     return app
 
 
-async def start():
+async def start(reply_cb=None, status_cb=None):
     """Запускает дашборд, если задан пароль. Ошибки дашборда не должны останавливать бота."""
+    global _reply_cb, _status_cb
+    _reply_cb, _status_cb = reply_cb, status_cb
     if not config.DASHBOARD_PASSWORD:
         log.info("Дашборд выключен: не задана переменная DASHBOARD_PASSWORD")
         return None

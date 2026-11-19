@@ -468,6 +468,28 @@ async def on_callback(event: MessageCallback):
 
 
 # ======================================================================
+# Действия из веб-дашборда (ответ и смена статуса)
+# ======================================================================
+async def dash_reply(req_id: int, text: str):
+    """Ответ работнику из дашборда. None — заявки нет; иначе True/False: доставлено ли."""
+    req = db.get_request(req_id)
+    if not req:
+        return None
+    delivered = await send(req["user_id"], f"Ответ по вашей заявке №{req_id}:\n\n{text}", [HOME_ROW])
+    db.add_reply(req_id, 0, text)  # 0 = ответ дан из дашборда
+    return delivered
+
+
+async def dash_status(req_id: int, status: str) -> bool:
+    req = db.get_request(req_id)
+    if not req or status not in STATUS_TITLES:
+        return False
+    db.set_status(req_id, status)
+    await send(req["user_id"], f"Статус вашей заявки №{req_id} изменён: {STATUS_TITLES[status]}.", [HOME_ROW])
+    return True
+
+
+# ======================================================================
 # Напоминания о сроках
 # ======================================================================
 async def reminder_loop():
@@ -491,7 +513,7 @@ async def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Не задан токен: добавьте переменную окружения MAX_BOT_TOKEN")
     db.init()
-    await dashboard.start()
+    await dashboard.start(dash_reply, dash_status)
     bot = Bot(config.BOT_TOKEN)
     try:
         await bot.delete_webhook()  # если был webhook, polling не получит события

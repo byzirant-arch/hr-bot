@@ -136,6 +136,23 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
 .reply { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .reply time { display: block; color: var(--muted); font-size: 13px; }
 
+
+.reply-box { margin: 6px 0 0; }
+.reply-box textarea {
+  width: 100%; min-height: 96px; resize: vertical; padding: 9px 11px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; line-height: 1.45;
+}
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.actions button {
+  background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 7px 13px; cursor: pointer;
+}
+.actions button:hover:not(:disabled) { border-color: var(--accent); }
+.actions button:disabled { opacity: .55; cursor: default; }
+.actions .primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
+.msg { margin: 14px 0 0; padding: 8px 12px; border-left: 4px solid var(--accent); background: var(--bg); }
+.msg.warn { border-left-color: var(--new); }
+.msg.bad { border-left-color: var(--over); }
+
 @media (max-width: 720px) {
   h1 { font-size: 23px; }
   .cat { grid-template-columns: 1fr; }
@@ -373,14 +390,70 @@ async function loadRows({ reset = false, keep = false } = {}) {
   renderTable();
 }
 
-async function openDrawer(id) {
+async function post(path, body) {
+  const r = await fetch(path, {
+    method: "POST", credentials: "same-origin", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Dashboard": "1" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+async function openDrawer(id, opts = {}) {
   const box = $("#drawer");
   try {
     const r = await api("/api/request/" + id);
+    const active = r.status === "new" || r.status === "in_work";
+    const note = el("p", { class: "msg" + (opts.kind ? " " + opts.kind : ""), role: "status" });
+    note.textContent = opts.message || "";
+    if (!opts.message) note.hidden = true;
+    const say = (text, kind) => { note.hidden = false; note.className = "msg" + (kind ? " " + kind : ""); note.textContent = text; };
+
+    const ta = el("textarea", { id: "reply-text", maxlength: "1500", "aria-label": "Текст ответа работнику",
+      placeholder: "Напишите ответ работнику. Он придёт ему в Max от имени бота." });
+    ta.value = opts.draft || "";
+    const sendBtn = el("button", { class: "primary", type: "button", text: "Отправить работнику" });
+    sendBtn.addEventListener("click", async () => {
+      const text = ta.value.trim();
+      if (!text) { say("Введите текст ответа.", "warn"); return; }
+      sendBtn.disabled = true; say("Отправляю…");
+      try {
+        const res = await post(`/api/request/${id}/reply`, { text });
+        await openDrawer(id, res.delivered
+          ? { message: "Ответ отправлен работнику в Max." }
+          : { message: "Ответ сохранён, но доставить его не удалось: возможно, работник ещё не запускал бота.", kind: "warn" });
+      } catch (e) {
+        say("Не удалось отправить ответ. Проверьте связь и попробуйте ещё раз.", "bad");
+        sendBtn.disabled = false;
+      }
+    });
+
+    const changes = active
+      ? [["in_work", "В работу"], ["done", "Исполнена"], ["rejected", "Отклонить"]].filter(([k]) => k !== r.status)
+      : [["in_work", "Вернуть в работу"]];
+    const statusBtns = changes.map(([key, label]) => {
+      const b = el("button", { type: "button", text: label });
+      b.addEventListener("click", async () => {
+        if (key === "rejected" && !confirm(`Отклонить заявку №${id}? Работник получит уведомление.`)) return;
+        b.disabled = true;
+        try {
+          await post(`/api/request/${id}/status`, { status: key });
+          await openDrawer(id, { message: `Статус изменён: ${STATUS[key]}. Работник уведомлён в Max.`, draft: ta.value });
+          refresh();
+        } catch (e) {
+          say("Не удалось изменить статус. Попробуйте ещё раз.", "bad");
+          b.disabled = false;
+        }
+      });
+      return b;
+    });
+
     box.replaceChildren(
       el("button", { class: "close", type: "button", onclick: closeDrawer, text: "Закрыть" }),
       el("h3", { text: "Заявка №" + r.id }),
       el("span", { class: "chip " + r.status, text: r.status_title }),
+      note,
       el("dl", {},
         el("dt", { text: "Раздел" }), el("dd", { text: r.category_title }),
         el("dt", { text: "Создана" }), el("dd", { text: r.created_local }),
@@ -390,12 +463,16 @@ async function openDrawer(id) {
         r.closed_local ? el("dt", { text: "Закрыта" }) : null, r.closed_local ? el("dd", { text: r.closed_local }) : null),
       el("h4", { text: "Содержание" }),
       el("dl", {}, ...r.fields.flatMap(([k, v]) => [el("dt", { text: k }), el("dd", { text: v })])),
-      el("h4", { text: "Ответы работнику" }),
-      r.replies.length ? r.replies.map((x) => el("div", { class: "reply" }, el("time", { text: x.created_local }), x.text))
-        : el("p", { class: "muted", text: "Ответов пока не было." }),
-      el("p", { class: "note", text: "Статус заявки и ответы меняются в боте: «Панель сотрудника» → «Заявки»." }));
+      el("h4", { text: "Ответить работнику" }),
+      el("div", { class: "reply-box" }, ta, el("div", { class: "actions" }, sendBtn)),
+      el("h4", { text: "Статус заявки" }),
+      el("div", { class: "actions" }, statusBtns),
+      el("h4", { text: "История ответов" }),
+      ...(r.replies.length ? r.replies.map((x) => el("div", { class: "reply" },
+        el("time", { text: x.created_local + (x.from_id === 0 ? " (из дашборда)" : " (из бота)") }), x.text))
+        : [el("p", { class: "muted", text: "Ответов пока не было." })]));
     box.hidden = false;
-    box.querySelector(".close").focus();
+    if (!opts.message) box.querySelector(".close").focus();
   } catch (e) { showError(e); }
 }
 function closeDrawer() { $("#drawer").hidden = true; }
@@ -405,7 +482,7 @@ async function refresh() {
   try {
     const s = await api("/api/stats");
     renderAttention(s); renderCategories(s); renderChart(s.daily); renderDates(s.settings);
-    $("#updated").textContent = `Обновлено ${s.generated_local} (${s.timezone}). Страница обновляется сама раз в минуту.`;
+    $("#updated").textContent = `Обновлено ${s.generated_local} (${s.timezone}). Страница обновляется сама раз в 30 секунд.`;
     await loadRows({ keep: rows.length > 0 });
     clearError();
   } catch (e) { showError(e); }
@@ -420,7 +497,7 @@ $("#f-q").addEventListener("input", (e) => {
   clearTimeout(timer);
   timer = setTimeout(() => { filters.q = e.target.value.trim(); loadRows({ reset: true }).catch(showError); }, 300);
 });
-setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+setInterval(() => { if (!document.hidden) refresh(); }, 30000);
 refresh();
 </script>
 </body>
