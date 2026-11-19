@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Панель бота: заявки работников</title>
+<style>
+:root {
+  --bg: #edf0f2; --panel: #fafbfb; --ink: #15202a; --muted: #566877; --line: #d3dade;
+  --accent: #0e5c70; --track: #dde3e7;
+  --new: #a85f00; --work: #2459a6; --done: #2b7a4b; --rej: #7a5656; --over: #b3261e;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f171d; --panel: #16212a; --ink: #e5ecf0; --muted: #92a3af; --line: #29383f;
+    --accent: #5fc0d6; --track: #25333c;
+    --new: #e5a43d; --work: #78a9ea; --done: #62c48b; --rej: #c7a0a0; --over: #ff8b82;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 Bahnschrift, "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
+}
+main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 64px; }
+h1 { font-size: 28px; line-height: 1.15; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 18px; margin: 0 0 14px; font-weight: 600; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header.top { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; justify-content: space-between; }
+.sub { color: var(--muted); margin: 4px 0 0; }
+.refresh {
+  background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.refresh:hover { border-color: var(--accent); }
+
+#err {
+  margin: 16px 0 0; padding: 10px 14px; border-left: 4px solid var(--over);
+  background: var(--panel); color: var(--ink);
+}
+
+section { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--line); }
+section:first-of-type { border-top: 0; padding-top: 0; }
+
+/* Что требует внимания */
+.attention { display: flex; flex-wrap: wrap; gap: 0; margin-top: 26px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; overflow: hidden; }
+.att {
+  flex: 1 1 200px; text-align: left; background: transparent; border: 0; cursor: pointer;
+  padding: 18px 22px; border-right: 1px solid var(--line);
+}
+.att:last-child { border-right: 0; }
+.att:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.att .n { display: block; font-size: 46px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; }
+.att .t { display: block; margin-top: 6px; color: var(--muted); }
+.att.over .n { color: var(--over); }
+.att.new .n { color: var(--new); }
+.att.work .n { color: var(--work); }
+.att.zero .n { color: var(--muted); }
+
+.facts { margin: 18px 0 0; max-width: 78ch; color: var(--ink); }
+.facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Разделы бота */
+.cats { list-style: none; margin: 0; padding: 0; }
+.cat {
+  display: grid; grid-template-columns: minmax(180px, 1.1fr) 2fr minmax(110px, auto);
+  gap: 6px 18px; align-items: center; padding: 11px 0; border-top: 1px solid var(--line);
+  width: 100%; background: transparent; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; cursor: pointer;
+}
+li:first-child > .cat { border-top: 0; }
+.cat:hover .name { text-decoration: underline; }
+.cat .name { font-weight: 500; }
+.cat .sla { display: block; font-size: 13px; color: var(--muted); font-weight: 400; }
+.bar { display: flex; height: 14px; background: var(--track); border-radius: 3px; overflow: hidden; }
+.bar span { display: block; height: 100%; }
+.bar .s-new { background: var(--new); } .bar .s-in_work { background: var(--work); }
+.bar .s-done { background: var(--done); } .bar .s-rejected { background: var(--rej); }
+.nums { font-variant-numeric: tabular-nums; text-align: right; }
+.nums .over { color: var(--over); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+/* Динамика */
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.chart .bar-rect { fill: var(--accent); }
+.chart .axis { stroke: var(--line); }
+
+/* Даты выплат */
+dl.dates { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; }
+dl.dates dt { color: var(--muted); }
+dl.dates dd { margin: 0; font-weight: 600; }
+dl.dates dd.unset { color: var(--muted); font-weight: 400; }
+.note { color: var(--muted); font-size: 13px; margin: 12px 0 0; max-width: 78ch; }
+
+/* Заявки */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.filters select, .filters input {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; min-width: 170px;
+}
+.filters input { flex: 1 1 220px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; min-width: 760px; }
+th { text-align: left; font-weight: 600; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { font-variant-numeric: tabular-nums; }
+.chip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.chip::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+.chip.new { color: var(--new); } .chip.in_work { color: var(--work); }
+.chip.done { color: var(--done); } .chip.rejected { color: var(--rej); }
+.late { color: var(--over); font-weight: 600; }
+.muted { color: var(--muted); }
+.empty { padding: 28px 16px; color: var(--muted); }
+.more { margin-top: 14px; }
+
+/* Карточка заявки */
+#drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%); background: var(--panel);
+  border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12);
+  padding: 22px 22px 40px; overflow-y: auto; z-index: 5;
+}
+#drawer[hidden] { display: none; }
+#drawer h3 { margin: 0 0 4px; font-size: 20px; }
+#drawer .close { float: right; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+#drawer dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0; }
+#drawer dt { color: var(--muted); }
+#drawer dd { margin: 0; overflow-wrap: anywhere; }
+#drawer h4 { margin: 22px 0 8px; font-size: 15px; }
+.reply { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.reply time { display: block; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 720px) {
+  h1 { font-size: 23px; }
+  .cat { grid-template-columns: 1fr; }
+  .nums { text-align: left; }
+  .att { border-right: 0; border-bottom: 1px solid var(--line); }
+  .att:last-child { border-bottom: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Заявки работников</h1>
+      <p class="sub" id="updated">Загрузка…</p>
+    </div>
+    <button class="refresh" id="refresh" type="button">Обновить</button>
+  </header>
+  <div id="err" role="alert" hidden></div>
+
+  <div class="attention" id="attention" aria-label="Что требует внимания"></div>
+  <p class="facts" id="facts"></p>
+
+  <section>
+    <h2>Разделы бота</h2>
+    <ul class="cats" id="cats"></ul>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section>
+    <h2>Новые заявки за 14 дней</h2>
+    <div id="chart"></div>
+  </section>
+
+  <section>
+    <h2>Даты выплат, которые видят работники</h2>
+    <dl class="dates" id="dates"></dl>
+    <p class="note">Даты меняет администратор в самом боте: «Панель сотрудника» → «Даты выплат». Здесь они показаны только для проверки.</p>
+  </section>
+
+  <section>
+    <h2>Все заявки</h2>
+    <div class="filters">
+      <select id="f-cat" aria-label="Раздел"><option value="">Все разделы</option></select>
+      <select id="f-status" aria-label="Статус">
+        <option value="">Любой статус</option>
+        <option value="active">Активные (новые и в работе)</option>
+        <option value="overdue">Просроченные</option>
+        <option value="new">Новые</option>
+        <option value="in_work">В работе</option>
+        <option value="done">Исполненные</option>
+        <option value="rejected">Отклонённые</option>
+      </select>
+      <input id="f-q" type="search" placeholder="Поиск: имя, номер, ID в Max, текст заявки" aria-label="Поиск">
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th class="num">№</th><th>Создана</th><th>Работник</th><th>Раздел</th><th>Статус</th><th>Срок ответа</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty" hidden>Заявок по этим условиям нет. Измените фильтры.</div>
+    </div>
+    <button class="refresh more" id="more" type="button" hidden>Показать ещё</button>
+  </section>
+</main>
+
+<aside id="drawer" hidden aria-label="Карточка заявки"></aside>
+
+<script>
+"use strict";
+// Все данные из бота вставляются только как текст (textContent), поэтому HTML из сообщений работников выполнить нельзя.
+const $ = (s) => document.querySelector(s);
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return e;
+}
+const fmt = (n) => Number(n).toLocaleString("ru-RU");
+const STATUS = { new: "Новая", in_work: "В работе", done: "Исполнена", rejected: "Отклонена" };
+const filters = { category: "", status: "", q: "" };
+let rows = [], total = 0, catsReady = false;
+
+async function api(path) {
+  const r = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+function showError(e) {
+  const box = $("#err");
+  box.hidden = false;
+  box.textContent = e && e.message === "401"
+    ? "Доступ закрыт. Обновите страницу и введите логин и пароль."
+    : "Не удалось получить данные от бота. Проверьте, что бот запущен, и нажмите «Обновить».";
+}
+const clearError = () => { $("#err").hidden = true; };
+
+function hours(h) {
+  if (h === null || h === undefined) return "пока нет данных";
+  if (h < 1) return "меньше часа";
+  if (h < 48) return String(h).replace(".", ",") + " ч";
+  return (Math.round(h / 2.4) / 10).toString().replace(".", ",") + " суток";
+}
+
+function setFilter(patch) {
+  Object.assign(filters, patch);
+  $("#f-cat").value = filters.category;
+  $("#f-status").value = filters.status;
+  loadRows({ reset: true });
+  $("#f-cat").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderAttention(s) {
+  const items = [
+    { cls: "over", n: s.overdue, t: "просрочено", status: "overdue" },
+    { cls: "new", n: s.by_status.new, t: "новых, ждут ответа", status: "new" },
+    { cls: "work", n: s.by_status.in_work, t: "в работе", status: "in_work" },
+  ];
+  $("#attention").replaceChildren(...items.map((i) =>
+    el("button", { class: "att " + i.cls + (i.n === 0 ? " zero" : ""), type: "button",
+      onclick: () => setFilter({ status: i.status, category: "" }) },
+      el("span", { class: "n", text: fmt(i.n) }), el("span", { class: "t", text: i.t }))));
+  const closed = s.by_status.done + s.by_status.rejected;
+  $("#facts").replaceChildren(
+    "В боте ", el("b", { text: fmt(s.users_total) }), " работников (",
+    el("b", { text: fmt(s.users_consent) }), " дали согласие на обработку данных, ",
+    el("b", { text: fmt(s.users_week) }), " новых за неделю). Всего заявок ",
+    el("b", { text: fmt(s.requests_total) }), ", закрыто ", el("b", { text: fmt(closed) }),
+    ". Среднее время до закрытия: ", el("b", { text: hours(s.avg_close_hours) }), ".");
+}
+
+function renderCategories(s) {
+  if (!catsReady) {
+    const sel = $("#f-cat");
+    for (const c of s.categories) sel.append(el("option", { value: c.key, text: c.title }));
+    catsReady = true;
+  }
+  $("#cats").replaceChildren(...s.categories.map((c) => {
+    const total = c.new + c.in_work + c.done + c.rejected;
+    const bar = el("div", { class: "bar", role: "img",
+      "aria-label": `Новых ${c.new}, в работе ${c.in_work}, исполнено ${c.done}, отклонено ${c.rejected}` });
+    for (const k of ["new", "in_work", "done", "rejected"]) {
+      if (c[k]) bar.append(el("span", { class: "s-" + k, style: `width:${(c[k] / total) * 100}%`, title: `${STATUS[k]}: ${c[k]}` }));
+    }
+    const active = c.new + c.in_work;
+    return el("li", {}, el("button", { class: "cat", type: "button", onclick: () => setFilter({ category: c.key, status: "" }) },
+      el("span", { class: "name" }, c.title,
+        el("span", { class: "sla", text: c.sla_hours ? `срок ответа ${c.sla_hours >= 48 ? c.sla_hours / 24 + " дня" : c.sla_hours + " ч"}` : "без срока" })),
+      total ? bar : el("span", { class: "muted", text: "заявок пока нет" }),
+      el("span", { class: "nums" },
+        total ? `${fmt(active)} активных из ${fmt(total)}` : "",
+        c.overdue ? el("span", { class: "over", text: `, просрочено ${c.overdue}` }) : "")));
+  }));
+  $("#legend").replaceChildren(...[["new", "var(--new)"], ["in_work", "var(--work)"], ["done", "var(--done)"], ["rejected", "var(--rej)"]]
+    .map(([k, col]) => el("span", {}, el("i", { style: "background:" + col }), STATUS[k])));
+}
+
+function renderChart(daily) {
+  const W = 700, H = 190, pad = { l: 28, r: 6, t: 16, b: 26 };
+  const max = Math.max(4, ...daily.map((d) => d.count));
+  const bw = (W - pad.l - pad.r) / daily.length;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("class", "chart");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Количество новых заявок по дням: " + daily.map((d) => `${d.date} — ${d.count}`).join(", "));
+  const ns = (name, attrs, text) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  for (const t of [0, Math.round(max / 2), max]) {
+    const y = pad.t + (H - pad.t - pad.b) * (1 - t / max);
+    svg.append(ns("line", { x1: pad.l, x2: W - pad.r, y1: y, y2: y, class: "axis" }));
+    svg.append(ns("text", { x: pad.l - 6, y: y + 4, "text-anchor": "end" }, t));
+  }
+  daily.forEach((d, i) => {
+    const h = (H - pad.t - pad.b) * (d.count / max);
+    const x = pad.l + i * bw + bw * 0.18, w = bw * 0.64, y = H - pad.b - h;
+    const g = ns("g", {});
+    g.append(ns("title", {}, `${d.date}: ${d.count}`));
+    if (d.count) g.append(ns("rect", { x, y, width: w, height: h, class: "bar-rect", rx: 2 }));
+    if (d.count) g.append(ns("text", { x: x + w / 2, y: y - 4, "text-anchor": "middle" }, d.count));
+    if (i % 2 === 0 || daily.length < 8) g.append(ns("text", { x: x + w / 2, y: H - 8, "text-anchor": "middle" }, d.date));
+    svg.append(g);
+  });
+  $("#chart").replaceChildren(svg);
+}
+
+function renderDates(settings) {
+  $("#dates").replaceChildren(...settings.flatMap((s) => [
+    el("dt", { text: s.title }),
+    el("dd", { class: s.value ? "" : "unset", text: s.value || "не задана, работники видят «пока не назначена»" }),
+  ]));
+}
+
+function renderTable() {
+  $("#rows").replaceChildren(...rows.map((r) =>
+    el("tr", { tabindex: "0", onclick: () => openDrawer(r.id), onkeydown: (e) => { if (e.key === "Enter") openDrawer(r.id); } },
+      el("td", { class: "num", text: "№" + r.id }),
+      el("td", { class: "num", text: r.created_local }),
+      el("td", {}, r.user_name, el("div", { class: "muted", text: "ID в Max: " + r.user_id })),
+      el("td", { text: r.category_title }),
+      el("td", {}, el("span", { class: "chip " + r.status, text: r.status_title })),
+      el("td", { class: "num" }, r.due_local ? (r.overdue ? el("span", { class: "late", text: "просрочено, до " + r.due_local }) : "до " + r.due_local)
+        : el("span", { class: "muted", text: "без срока" })))));
+  $("#empty").hidden = rows.length > 0;
+  $("#more").hidden = rows.length >= total;
+  $("#more").textContent = `Показать ещё (${fmt(total - rows.length)})`;
+}
+
+async function loadRows({ reset = false, keep = false } = {}) {
+  const p = new URLSearchParams();
+  if (filters.category) p.set("category", filters.category);
+  if (filters.status) p.set("status", filters.status);
+  if (filters.q) p.set("q", filters.q);
+  if (reset) rows = [];
+  p.set("limit", keep ? Math.min(200, Math.max(50, rows.length)) : 50);
+  p.set("offset", keep ? 0 : rows.length);
+  const d = await api("/api/requests?" + p);
+  rows = keep ? d.items : rows.concat(d.items);
+  total = d.total;
+  renderTable();
+}
+
+async function openDrawer(id) {
+  const box = $("#drawer");
+  try {
+    const r = await api("/api/request/" + id);
+    box.replaceChildren(
+      el("button", { class: "close", type: "button", onclick: closeDrawer, text: "Закрыть" }),
+      el("h3", { text: "Заявка №" + r.id }),
+      el("span", { class: "chip " + r.status, text: r.status_title }),
+      el("dl", {},
+        el("dt", { text: "Раздел" }), el("dd", { text: r.category_title }),
+        el("dt", { text: "Создана" }), el("dd", { text: r.created_local }),
+        el("dt", { text: "Работник" }), el("dd", { text: r.user_name }),
+        el("dt", { text: "ID в Max" }), el("dd", { text: String(r.user_id) }),
+        el("dt", { text: "Срок ответа" }), el("dd", { class: r.overdue ? "late" : "", text: r.due_local ? (r.overdue ? "просрочено, до " + r.due_local : r.due_local) : "без срока" }),
+        r.closed_local ? el("dt", { text: "Закрыта" }) : null, r.closed_local ? el("dd", { text: r.closed_local }) : null),
+      el("h4", { text: "Содержание" }),
+      el("dl", {}, ...r.fields.flatMap(([k, v]) => [el("dt", { text: k }), el("dd", { text: v })])),
+      el("h4", { text: "Ответы работнику" }),
+      r.replies.length ? r.replies.map((x) => el("div", { class: "reply" }, el("time", { text: x.created_local }), x.text))
+        : el("p", { class: "muted", text: "Ответов пока не было." }),
+      el("p", { class: "note", text: "Статус заявки и ответы меняются в боте: «Панель сотрудника» → «Заявки»." }));
+    box.hidden = false;
+    box.querySelector(".close").focus();
+  } catch (e) { showError(e); }
+}
+function closeDrawer() { $("#drawer").hidden = true; }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+async function refresh() {
+  try {
+    const s = await api("/api/stats");
+    renderAttention(s); renderCategories(s); renderChart(s.daily); renderDates(s.settings);
+    $("#updated").textContent = `Обновлено ${s.generated_local} (${s.timezone}). Страница обновляется сама раз в минуту.`;
+    await loadRows({ keep: rows.length > 0 });
+    clearError();
+  } catch (e) { showError(e); }
+}
+
+$("#refresh").addEventListener("click", refresh);
+$("#more").addEventListener("click", () => loadRows().catch(showError));
+$("#f-cat").addEventListener("change", (e) => { filters.category = e.target.value; loadRows({ reset: true }).catch(showError); });
+$("#f-status").addEventListener("change", (e) => { filters.status = e.target.value; loadRows({ reset: true }).catch(showError); });
+let timer;
+$("#f-q").addEventListener("input", (e) => {
+  clearTimeout(timer);
+  timer = setTimeout(() => { filters.q = e.target.value.trim(); loadRows({ reset: true }).catch(showError); }, 300);
+});
+setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+refresh();
+</script>
+</body>
+</html>

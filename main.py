@@ -9,6 +9,7 @@ from maxapi.types import BotStarted, CallbackButton, MessageCallback, MessageCre
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 import config
+import dashboard
 import db
 import validators
 from menu_config import (CATEGORIES, FLOWS, INFO, INSTANT, SCREENS, SETTINGS,
@@ -179,7 +180,7 @@ HOME_ROW = [HOME_BTN]
 # Панель сотрудника (администратор / ответственный)
 # ======================================================================
 def admin_home_rows(uid: int):
-    rows = [[("📥 Заявки", "adm:cats")]]
+    rows = [[("📥 Заявки", "adm:cats")], [("📊 Статистика", "adm:stats")]]
     if is_admin(uid):
         rows.append([("📅 Даты выплат", "adm:dates")])
     rows.append([HOME_BTN])
@@ -278,6 +279,25 @@ async def adm_reply_send(uid: int, sess: dict, text: str):
     await adm_request(uid, req_id)
 
 
+async def adm_stats(uid: int):
+    s = db.stats(config.BOT_TZ)
+    st = s["by_status"]
+    lines = [
+        "Статистика бота",
+        f"Работников в боте: {s['users_total']} (согласие дали: {s['users_consent']})",
+        f"Заявок всего: {s['requests_total']}",
+        f"Новых: {st['new']}, в работе: {st['in_work']}, исполнено: {st['done']}, отклонено: {st['rejected']}",
+        f"Просрочено: {s['overdue']}",
+        "",
+        "Активные заявки по разделам:",
+    ]
+    for key, cat in CATEGORIES.items():
+        c = s["by_category"].get(key, {})
+        lines.append(f"• {cat['title']}: {c.get('new', 0) + c.get('in_work', 0)}")
+    lines += ["", dates_text()]
+    await send(uid, "\n".join(lines), [[("← Назад", "adm:home")]])
+
+
 def dates_text() -> str:
     return "\n".join(f"{title}: {db.get_setting(key) or DATE_NOT_SET}" for key, title in SETTINGS.items())
 
@@ -322,6 +342,8 @@ async def handle_admin(uid: int, parts: list[str]):
         await adm_home(uid)
     elif action == "cats":
         await adm_cats(uid)
+    elif action == "stats":
+        await adm_stats(uid)
     elif action == "list":
         await adm_list(uid, parts[2], parts[3] if len(parts) > 3 else "a")
     elif action == "req":
@@ -469,6 +491,7 @@ async def main():
     if not config.BOT_TOKEN:
         raise SystemExit("Не задан токен: добавьте переменную окружения MAX_BOT_TOKEN")
     db.init()
+    await dashboard.start()
     bot = Bot(config.BOT_TOKEN)
     try:
         await bot.delete_webhook()  # если был webhook, polling не получит события

@@ -35,3 +35,9 @@ CONSENT_TEXT = os.getenv(
     "сведения из заявок) только для рассмотрения ваших обращений. "
     "Нажимая «Согласен(на)», вы даёте согласие на их обработку.",
 )
+
+# ---------- веб-дашборд (index.html) ----------
+# Включается, только если задан пароль (не короче 8 символов).
+DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT") or os.getenv("PORT") or 8080)

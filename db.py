@@ -214,3 +214,79 @@ def due_for_reminder(before_hours: float) -> list[dict]:
 
 def mark_reminded(request_id: int) -> None:
     _run("UPDATE requests SET reminder_sent=1 WHERE id=?", (request_id,))
+
+
+# ---------- статистика для дашборда ----------
+def stats(tz_name: str, days: int = 14) -> dict:
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(timezone.utc)
+    now_s = now.strftime(FMT)
+    week_ago = (now - timedelta(days=7)).strftime(FMT)
+
+    u = _run("SELECT COUNT(*) AS n, COALESCE(SUM(consent),0) AS c FROM users", (), "one")
+    u_week = _run("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", (week_ago,), "one")
+    rows = _run("SELECT category, status, created_at, due_at, closed_at FROM requests", (), "all")
+
+    by_status = {"new": 0, "in_work": 0, "done": 0, "rejected": 0}
+    by_cat: dict[str, dict] = {}
+    overdue = 0
+    close_hours = []
+    today = now.astimezone(tz).date()
+    daily = {(today - timedelta(days=i)): 0 for i in range(days - 1, -1, -1)}
+
+    for r in rows:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        c = by_cat.setdefault(r["category"], {"new": 0, "in_work": 0, "done": 0, "rejected": 0, "overdue": 0})
+        c[r["status"]] = c.get(r["status"], 0) + 1
+        if r["status"] in ACTIVE and r["due_at"] and r["due_at"] < now_s:
+            overdue += 1
+            c["overdue"] += 1
+        if r["closed_at"]:
+            try:
+                a = datetime.strptime(r["created_at"], FMT)
+                b = datetime.strptime(r["closed_at"], FMT)
+                close_hours.append((b - a).total_seconds() / 3600)
+            except ValueError:
+                pass
+        d = datetime.strptime(r["created_at"], FMT).replace(tzinfo=timezone.utc).astimezone(tz).date()
+        if d in daily:
+            daily[d] += 1
+
+    return {
+        "users_total": u["n"],
+        "users_consent": u["c"],
+        "users_week": u_week["n"],
+        "requests_total": len(rows),
+        "by_status": by_status,
+        "overdue": overdue,
+        "by_category": by_cat,
+        "avg_close_hours": round(sum(close_hours) / len(close_hours), 1) if close_hours else None,
+        "daily": [{"date": d.strftime("%d.%m"), "count": n} for d, n in daily.items()],
+    }
+
+
+def search_requests(category: str = "", status: str = "", q: str = "",
+                    limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    where, params = [], []
+    if category:
+        where.append("category=?")
+        params.append(category)
+    if status == "active":
+        where.append("status IN ('new','in_work')")
+    elif status == "overdue":
+        where.append("status IN ('new','in_work') AND due_at IS NOT NULL AND due_at < ?")
+        params.append(now_iso())
+    elif status:
+        where.append("status=?")
+        params.append(status)
+    sql = "SELECT * FROM requests" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC"
+    rows = [_decode(r) for r in _run(sql, tuple(params), "all")]
+    q = (q or "").strip().casefold()
+    if q:
+        def hit(r):
+            blob = " ".join([str(r["id"]), str(r["user_id"]), r["user_name"] or ""] +
+                            [f"{a} {b}" for a, b in r["fields"]]).casefold()
+            return q.lstrip("№#") in blob
+        rows = [r for r in rows if hit(r)]
+    return rows[offset: offset + limit], len(rows)
